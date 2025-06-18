@@ -156,6 +156,12 @@ class StrategyAnalyzerV2:
                 reason += f" (LS({trigger_details.get('lower_shadow', 0):.2f}) > Body({trigger_details.get('body_size', 0):.2f}) * {trigger_details.get('shadow_factor_used', 0):.1f})"
             elif trigger == "Bullish Volume-Price Divergence":
                 reason += f" (Body/Range({trigger_details.get('body_to_range_ratio', 0):.1%}) < {trigger_details.get('threshold_pct_used', 0):.1%})"
+            
+            # V2.6: 附加K线核心信息
+            ohlc_info = (f" [Candle T: {trigger_details.get('trigger_candle_time')}, "
+                         f"O:{trigger_details.get('open'):.2f}, H:{trigger_details.get('high'):.2f}, "
+                         f"L:{trigger_details.get('low'):.2f}, C:{trigger_details.get('close'):.2f}]")
+            reason += ohlc_info
 
             return {
                 'decision': 'LONG',
@@ -171,14 +177,16 @@ class StrategyAnalyzerV2:
         V2.4 区间攻防算法：识别有效支撑 (2H趋势向上时)
         """
         strat_params = self.params
-        candle = data_dict[config.SIGNAL_TIMEFRAME].iloc[-1]
+        # 修正: 明确使用15M K线作为判断基准
+        candle = data_dict['15m'].iloc[-1]
         open_price, close_price = candle['open'], candle['close']
 
+        # 修正: 明确使用15m和30m的EMA线作为支撑梯队
         support_levels = {
-            f"{config.SIGNAL_TIMEFRAME}_EMA{strat_params.EMA_FAST}": data_dict[config.SIGNAL_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
-            f"{config.SIGNAL_TIMEFRAME}_EMA{strat_params.EMA_SLOW}": data_dict[config.SIGNAL_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
-            f"{config.TREND_TIMEFRAME}_EMA{strat_params.EMA_FAST}": data_dict[config.TREND_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
-            f"{config.TREND_TIMEFRAME}_EMA{strat_params.EMA_SLOW}": data_dict[config.TREND_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
+            f"15m_EMA{strat_params.EMA_FAST}": data_dict['15m'].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
+            f"15m_EMA{strat_params.EMA_SLOW}": data_dict['15m'].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
+            f"30m_EMA{strat_params.EMA_FAST}": data_dict['30m'].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
+            f"30m_EMA{strat_params.EMA_SLOW}": data_dict['30m'].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
         }
         # 按价格从高到低排序
         levels = sorted(support_levels.items(), key=lambda item: item[1], reverse=True)
@@ -247,6 +255,10 @@ class StrategyAnalyzerV2:
             'avg_volume': avg_volume,
             'is_volume_spike': is_volume_spike,
             'trigger_candle_time': candle.name,
+            'open': candle['open'],
+            'high': candle['high'],
+            'low': candle['low'],
+            'close': candle['close'],
         }
 
         # 形态一: 锤子线 (长下影, 不关心颜色)
@@ -312,6 +324,12 @@ class StrategyAnalyzerV2:
             elif trigger == "Bearish Volume-Price Divergence":
                 reason += f" (Body/Range({trigger_details.get('body_to_range_ratio', 0):.1%}) < {trigger_details.get('threshold_pct_used', 0):.1%})"
             
+            # V2.6: 附加K线核心信息
+            ohlc_info = (f" [Candle T: {trigger_details.get('trigger_candle_time')}, "
+                         f"O:{trigger_details.get('open'):.2f}, H:{trigger_details.get('high'):.2f}, "
+                         f"L:{trigger_details.get('low'):.2f}, C:{trigger_details.get('close'):.2f}]")
+            reason += ohlc_info
+
             return {
                 'decision': 'SHORT',
                 'reason': reason,
@@ -326,14 +344,16 @@ class StrategyAnalyzerV2:
         V2.4 区间攻防算法：识别有效阻力 (2H趋势向下时)
         """
         strat_params = self.params
-        candle = data_dict[config.SIGNAL_TIMEFRAME].iloc[-1]
+        # 修正: 明确使用15M K线作为判断基准
+        candle = data_dict['15m'].iloc[-1]
         open_price, close_price = candle['open'], candle['close']
 
+        # 修正: 明确使用15m和30m的EMA线作为阻力梯队
         resistance_levels = {
-            f"{config.SIGNAL_TIMEFRAME}_EMA{strat_params.EMA_FAST}": data_dict[config.SIGNAL_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
-            f"{config.SIGNAL_TIMEFRAME}_EMA{strat_params.EMA_SLOW}": data_dict[config.SIGNAL_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
-            f"{config.TREND_TIMEFRAME}_EMA{strat_params.EMA_FAST}": data_dict[config.TREND_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
-            f"{config.TREND_TIMEFRAME}_EMA{strat_params.EMA_SLOW}": data_dict[config.TREND_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
+            f"15m_EMA{strat_params.EMA_FAST}": data_dict['15m'].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
+            f"15m_EMA{strat_params.EMA_SLOW}": data_dict['15m'].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
+            f"30m_EMA{strat_params.EMA_FAST}": data_dict['30m'].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
+            f"30m_EMA{strat_params.EMA_SLOW}": data_dict['30m'].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
         }
         # 按价格从低到高排序
         levels = sorted(resistance_levels.items(), key=lambda item: item[1])
@@ -402,6 +422,10 @@ class StrategyAnalyzerV2:
             'avg_volume': avg_volume,
             'is_volume_spike': is_volume_spike,
             'trigger_candle_time': candle.name,
+            'open': candle['open'],
+            'high': candle['high'],
+            'low': candle['low'],
+            'close': candle['close'],
         }
 
         # 形态一: 射击之星 (长上影, 不关心颜色)

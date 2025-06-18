@@ -103,7 +103,7 @@ class Config:
         DATA_UPDATE_INTERVAL: int = 60
         
         # 日志配置
-        LOG_LEVEL: str = 'INFO'
+        LOG_LEVEL: str = 'DEBUG'
         LOG_FORMAT: str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
         
         # 请求限制

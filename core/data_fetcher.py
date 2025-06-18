@@ -99,7 +99,7 @@ class DataFetcher:
             )
             
             # 转换为DataFrame
-            df = self._klines_to_dataframe(klines)
+            df = self._klines_to_dataframe(klines, interval)
             
             logger.debug(f"成功获取 {symbol} {interval} K线数据: {len(df)} 条")
             return df
@@ -224,12 +224,13 @@ class DataFetcher:
             logger.error(f"获取所有交易对数据失败: {e}")
             raise
     
-    def _klines_to_dataframe(self, klines: List[List]) -> pd.DataFrame:
+    def _klines_to_dataframe(self, klines: List[List], interval: str = "N/A") -> pd.DataFrame:
         """
         将K线数据转换为DataFrame
         
         Args:
             klines: 币安API返回的K线数据
+            interval: 当前K线的时间框架，用于日志记录
         
         Returns:
             格式化的DataFrame
@@ -262,6 +263,16 @@ class DataFetcher:
         
         # 确保数据按时间排序
         df.sort_index(inplace=True)
+        
+        # --- V2.7 新增: 调试日志，打印最后一行数据 ---
+        if not df.empty:
+            last_kline = df.iloc[-1]
+            logger.debug(
+                f"[{interval}] Kline data processed. Last candle: "
+                f"T:{last_kline.name.strftime('%Y-%m-%d %H:%M:%S')}, "
+                f"O:{last_kline['open']:.4f}, H:{last_kline['high']:.4f}, "
+                f"L:{last_kline['low']:.4f}, C:{last_kline['close']:.4f}"
+            )
         
         return df
     
