@@ -1,6 +1,8 @@
 # 使用官方的、轻量级的Python 3.10镜像作为基础
 FROM python:3.10-slim-buster
-
+# 设置时区为中国标准时间
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 # 设置环境变量，确保Python输出是无缓冲的，便于实时查看日志
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
