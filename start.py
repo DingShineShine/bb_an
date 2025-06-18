@@ -111,6 +111,22 @@ def display_config_info():
         print(f"⚠️  无法读取配置: {e}")
 
 
+def run_main_program():
+    """封装启动主程序的逻辑"""
+    print("\n🚀 正在启动主程序...\n")
+    try:
+        # 使用 subprocess 启动主程序
+        # 这使得主程序在一个独立的进程中运行，与启动脚本分离
+        subprocess.run(["python", "main.py"], check=True)
+        print("\n✅ 主程序运行结束。")
+    except FileNotFoundError:
+        print("\n❌ 错误: main.py 文件未找到！请确保主程序文件存在。")
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ 主程序运行时发生错误: {e}")
+    except Exception as e:
+        print(f"\n❌ 启动过程中发生未知错误: {e}")
+
+
 def main():
     """主函数"""
     print_banner()
@@ -144,49 +160,38 @@ def main():
     print("🎯 所有检查通过！准备启动交易机器人...")
     print("="*60)
     
-    # 显示使用提示
-    print("\n📢 使用提示:")
-    print("• 当前版本仅进行市场分析，不执行实际交易")
-    print("• 建议先在测试网环境下观察程序运行")
-    print("• 程序运行时会生成详细的分析日志")
-    print("• 按 Ctrl+C 可以安全停止程序")
-    
-    # 询问是否继续
-    print("\n是否现在启动程序？")
-    print("1. 是，立即启动")
-    print("2. 否，退出")
-    
-    try:
-        choice = input("\n请选择 (1/2): ").strip()
+    # 检查是否在Docker等非交互式环境中运行
+    if os.environ.get('EXECUTION_MODE') == 'docker':
+        print("\n[INFO] 检测到Docker环境，将自动启动主程序...")
+        run_main_program()
+    else:
+        # 在本地交互式环境中运行
+        print("\n📢 使用提示:")
+        print("• 当前版本仅进行市场分析，不执行实际交易")
+        print("• 建议先在测试网环境下观察程序运行")
+        print("• 程序运行时会生成详细的分析日志")
+        print("• 按 Ctrl+C 可以安全停止程序")
+
+        while True:
+            choice = input("\n是否现在启动程序？\n1. 是，立即启动\n2. 否，退出\n\n请选择 (1/2): ").strip()
+            if choice == '1':
+                run_main_program()
+                break
+            elif choice == '2':
+                print("程序已退出。")
+                break
+            else:
+                print("无效输入，请输入 1 或 2。")
         
-        if choice == "1":
-            print("\n🚀 正在启动 BinanceEventTrader...")
-            print("="*60)
-            
-            # 启动主程序
-            try:
-                import main
-                # 如果成功导入，说明环境正常，可以直接运行
-                import asyncio
-                asyncio.run(main.main())
-            except KeyboardInterrupt:
-                print("\n用户中断程序")
-            except Exception as e:
-                print(f"\n程序运行时发生错误: {e}")
-                print("请检查日志文件获取详细信息")
-                
-        elif choice == "2":
-            print("\n👋 程序已退出")
-        else:
-            print("\n无效选择，程序退出")
-            
-    except KeyboardInterrupt:
-        print("\n\n👋 用户取消，程序退出")
-    except Exception as e:
-        print(f"\n启动过程中发生错误: {e}")
-    
-    input("\n按回车键退出...")
+        input("\n按回车键退出...")
 
 
 if __name__ == "__main__":
-    main() 
+    try:
+        main()
+    except EOFError:
+        # 这个捕获现在主要用于处理一些未预料到的非交互式执行情况
+        print("\n[ERROR] 启动过程中检测到EOF错误。")
+        print("如果是通过Docker运行，请确保 'EXECUTION_MODE=docker' 环境变量已在docker-compose.yml中设置。")
+    except KeyboardInterrupt:
+        print("\n\n操作被用户中断。程序已退出。") 
