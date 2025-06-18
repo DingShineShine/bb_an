@@ -257,7 +257,7 @@ class BinanceEventTrader:
             if active_signals:
                 logger.info("🎯 活跃交易信号:")
                 for signal in active_signals:
-                    text_b = {'text': f'bbbbbb'}
+                    text_b = {'text': f'bbbbbb <at user_id="618514145">丁光辉</at>'}
                     json_b = {'msg_type': 'text', 'content': text_b}
                     requests.post('https://open.feishu.cn/open-apis/bot/v2/hook/c8905c57-0d68-4366-93eb-df219b8794ad',
                                   headers={
