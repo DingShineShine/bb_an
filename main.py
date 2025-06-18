@@ -193,12 +193,12 @@ class BinanceEventTrader:
             if 'effective_support_name' in details:
                 level = details.get('effective_support_level')
                 level_str = f"{level:.4f}" if level is not None else "N/A"
-                logger.debug(f"  - 有效支撑: {details['effective_support_name']} at {level_str}")
+                logger.info(f"  - 有效支撑: {details['effective_support_name']} at {level_str}")
 
             if 'effective_resistance_name' in details:
                 level = details.get('effective_resistance_level')
                 level_str = f"{level:.4f}" if level is not None else "N/A"
-                logger.debug(f"  - 有效阻力: {details['effective_resistance_name']} at {level_str}")
+                logger.info(f"  - 有效阻力: {details['effective_resistance_name']} at {level_str}")
 
             if 'trigger_candle_time' in details:
                 logger.debug(f"  - 触发信号K线时间: {details['trigger_candle_time']}")

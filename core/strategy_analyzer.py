@@ -129,7 +129,7 @@ class StrategyAnalyzerV2:
         """分析做多机会的完整流程。"""
         details = {}
         # 1. 识别动态支撑
-        support_level, support_name = self._identify_effective_support(data_dict)
+        support_name, support_level = self._identify_effective_support(data_dict)
         details.update({'effective_support_name': support_name, 'effective_support_level': support_level})
         if not support_level:
             return {'decision': 'WAIT', 'reason': 'Could not identify effective support level.', 'details': details}
@@ -159,41 +159,54 @@ class StrategyAnalyzerV2:
         return {'decision': 'WAIT', 'reason': f'Price at support {support_name}, but no trigger signal found.',
                 'details': details}
 
-    def _identify_effective_support(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[Optional[float], Optional[str]]:
-        """[V2.2] 识别有效支撑前沿 (Effective Support Frontier)"""
-        price = data_dict['1m'].iloc[-1]['close']
-        # 支撑梯队，从强到弱排序
-        support_levels = [
-            ('30m_EMA20', data_dict['30m'].iloc[-1][f'ema_{self.params.EMA_SLOW}']),
-            ('30m_EMA10', data_dict['30m'].iloc[-1][f'ema_{self.params.EMA_FAST}']),
-            ('15m_EMA20', data_dict['15m'].iloc[-1][f'ema_{self.params.EMA_SLOW}']),
-            ('15m_EMA10', data_dict['15m'].iloc[-1][f'ema_{self.params.EMA_FAST}']),
-        ]
+    def _identify_effective_support(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[Optional[str], Optional[float]]:
+        """
+        V2.4 区间攻防算法：识别有效支撑 (2H趋势向上时)
+        """
+        strat_params = self.params.StrategyParams
+        candle = data_dict[config.SIGNAL_TIMEFRAME].iloc[-1]
+        open_price, close_price = candle['open'], candle['close']
 
-        # 找到所有在价格下方的支撑位
-        valid_supports = [(name, level) for name, level in support_levels if price >= level]
+        support_levels = {
+            f"{config.SIGNAL_TIMEFRAME}_EMA{strat_params.EMA_FAST}": data_dict[config.SIGNAL_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
+            f"{config.SIGNAL_TIMEFRAME}_EMA{strat_params.EMA_SLOW}": data_dict[config.SIGNAL_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
+            f"{config.TREND_TIMEFRAME}_EMA{strat_params.EMA_FAST}": data_dict[config.TREND_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
+            f"{config.TREND_TIMEFRAME}_EMA{strat_params.EMA_SLOW}": data_dict[config.TREND_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
+        }
+        # 按价格从高到低排序
+        levels = sorted(support_levels.items(), key=lambda item: item[1], reverse=True)
+        (s1_n, s1_v), (s2_n, s2_v), (s3_n, s3_v), (s4_n, s4_v) = levels[0], levels[1], levels[2], levels[3]
 
-        if not valid_supports:
-            return None, None
+        def get_zone(price):
+            if price > s1_v: return 0
+            if s2_v < price <= s1_v: return 1
+            if s3_v < price <= s2_v: return 2
+            if s4_v < price <= s3_v: return 3
+            return 4 # price <= s4_v
+            
+        open_zone, close_zone = get_zone(open_price), get_zone(close_price)
 
-        # 第一个候选者是离价格最近的（最强的）有效支撑
-        effective_support = valid_supports[0]
+        # 规则1: 开盘和收盘在同一区间
+        if open_zone == close_zone:
+            if open_zone == 0: return s1_n, s1_v
+            if open_zone == 1: return s2_n, s2_v
+            if open_zone == 2: return s3_n, s3_v
+            if open_zone == 3: return s4_n, s4_v
+            if open_zone == 4: return None, None # 回调过深，无有效支撑
 
-        # [核心逻辑] 检查聚集区效应
-        for i in range(len(valid_supports) - 1):
-            current_name, current_level = valid_supports[i]
-            next_name, next_level = valid_supports[i + 1]  # 更弱一级的支撑
-
-            # 如果两个支撑位非常接近，则认为它们形成聚集区，应以更强的为准
-            if abs(current_level - next_level) / price < self.params.CLUSTER_THRESHOLD:
-                # 当前支撑位被聚集，继续使用更强的支撑位
-                continue
-            else:
-                # 找到了一个独立的、非聚集的支撑位
-                effective_support = valid_supports[i]
-                break
-
-        return effective_support[1], effective_support[0]
+        # 规则2: 开盘和收盘跨越了边界线
+        if close_price < open_price: # 阴线，空头向下突破
+            if close_zone == 1: return s2_n, s2_v
+            if close_zone == 2: return s3_n, s3_v
+            if close_zone == 3: return s4_n, s4_v
+            if close_zone == 4: return None, None
+        else: # 阳线，多头向上反弹
+            if open_zone == 1: return s1_n, s1_v # 从zone1弹起，说明s1是支撑
+            if open_zone == 2: return s2_n, s2_v
+            if open_zone == 3: return s3_n, s3_v
+            if open_zone == 4: return s4_n, s4_v
+            
+        return None, None
 
     def _find_long_trigger(self, df_5m: pd.DataFrame) -> Tuple[Optional[str], Dict]:
         """
@@ -232,9 +245,8 @@ class StrategyAnalyzerV2:
         # 形态二: 量价背离 (放量收小阴线实体)
         # 条件: 实体很小(相对于总振幅), 且是阴线(代表抛售努力)
         if candle_range > 1e-9 and \
-                (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT:
-            # (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT and \
-            # candle['close'] < candle['open']:
+                (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT and \
+                candle['close'] < candle['open']:
             return "Bullish Volume-Price Divergence", {'trigger_candle_time': candle.name}
 
         return None, {}
@@ -244,7 +256,7 @@ class StrategyAnalyzerV2:
         """分析做空机会的完整流程。"""
         details = {}
         # 1. 识别动态阻力
-        resistance_level, resistance_name = self._identify_effective_resistance(data_dict)
+        resistance_name, resistance_level = self._identify_effective_resistance(data_dict)
         details.update({'effective_resistance_name': resistance_name, 'effective_resistance_level': resistance_level})
         if not resistance_level:
             return {'decision': 'WAIT', 'reason': 'Could not identify effective resistance level.', 'details': details}
@@ -274,43 +286,54 @@ class StrategyAnalyzerV2:
         return {'decision': 'WAIT', 'reason': f'Price at resistance {resistance_name}, but no trigger signal found.',
                 'details': details}
 
-    def _identify_effective_resistance(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[
-        Optional[float], Optional[str]]:
-        """[V2.2] 识别有效阻力前沿 (Effective Resistance Frontier)"""
-        price = data_dict['1m'].iloc[-1]['close']
-        # 阻力梯队，从弱到强排序
-        resistance_levels = [
-            ('15m_EMA10', data_dict['15m'].iloc[-1][f'ema_{self.params.EMA_FAST}']),
-            ('15m_EMA20', data_dict['15m'].iloc[-1][f'ema_{self.params.EMA_SLOW}']),
-            ('30m_EMA10', data_dict['30m'].iloc[-1][f'ema_{self.params.EMA_FAST}']),
-            ('30m_EMA20', data_dict['30m'].iloc[-1][f'ema_{self.params.EMA_SLOW}']),
-        ]
+    def _identify_effective_resistance(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[Optional[str], Optional[float]]:
+        """
+        V2.4 区间攻防算法：识别有效阻力 (2H趋势向下时)
+        """
+        strat_params = self.params.StrategyParams
+        candle = data_dict[config.SIGNAL_TIMEFRAME].iloc[-1]
+        open_price, close_price = candle['open'], candle['close']
 
-        # 找到所有在价格上方的阻力位
-        valid_resistances = [(name, level) for name, level in resistance_levels if price <= level]
+        resistance_levels = {
+            f"{config.SIGNAL_TIMEFRAME}_EMA{strat_params.EMA_FAST}": data_dict[config.SIGNAL_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
+            f"{config.SIGNAL_TIMEFRAME}_EMA{strat_params.EMA_SLOW}": data_dict[config.SIGNAL_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
+            f"{config.TREND_TIMEFRAME}_EMA{strat_params.EMA_FAST}": data_dict[config.TREND_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_FAST}'],
+            f"{config.TREND_TIMEFRAME}_EMA{strat_params.EMA_SLOW}": data_dict[config.TREND_TIMEFRAME].iloc[-1][f'ema_{strat_params.EMA_SLOW}'],
+        }
+        # 按价格从低到高排序
+        levels = sorted(resistance_levels.items(), key=lambda item: item[1])
+        (r1_n, r1_v), (r2_n, r2_v), (r3_n, r3_v), (r4_n, r4_v) = levels[0], levels[1], levels[2], levels[3]
 
-        if not valid_resistances:
-            return None, None
+        def get_zone(price):
+            if price < r1_v: return 0
+            if r1_v <= price < r2_v: return 1
+            if r2_v <= price < r3_v: return 2
+            if r3_v <= price < r4_v: return 3
+            return 4 # price >= r4_v
 
-        # 第一个候选者是离价格最近的（最弱的）有效阻力
-        effective_resistance = valid_resistances[0]
+        open_zone, close_zone = get_zone(open_price), get_zone(close_price)
 
-        # [核心逻辑] 检查聚集区效应
-        for i in range(len(valid_resistances) - 1):
-            current_name, current_level = valid_resistances[i]
-            next_name, next_level = valid_resistances[i + 1]  # 更强一级的阻力
+        # 规则1: 开盘和收盘在同一区间
+        if open_zone == close_zone:
+            if open_zone == 0: return r1_n, r1_v
+            if open_zone == 1: return r2_n, r2_v
+            if open_zone == 2: return r3_n, r3_v
+            if open_zone == 3: return r4_n, r4_v
+            if open_zone == 4: return None, None  # 反弹过强，无有效阻力
 
-            # 如果两个阻力位非常接近，则认为它们形成聚集区，应以更强的为准
-            if abs(next_level - current_level) / price < self.params.CLUSTER_THRESHOLD:
-                # 当前阻力位太弱且被聚集，升级到更强的阻力位
-                effective_resistance = valid_resistances[i + 1]
-                continue
-            else:
-                # 找到了一个独立的、非聚集的阻力位
-                effective_resistance = valid_resistances[i]
-                break
-
-        return effective_resistance[1], effective_resistance[0]
+        # 规则2: 开盘和收盘跨越了边界线
+        if close_price > open_price:  # 阳线，多头向上突破
+            if close_zone == 1: return r2_n, r2_v
+            if close_zone == 2: return r3_n, r3_v
+            if close_zone == 3: return r4_n, r4_v
+            if close_zone == 4: return None, None
+        else:  # 阴线，空头向下打压
+            if open_zone == 1: return r1_n, r1_v # 从zone1跌破，说明r1是阻力
+            if open_zone == 2: return r2_n, r2_v
+            if open_zone == 3: return r3_n, r3_v
+            if open_zone == 4: return r4_n, r4_v
+            
+        return None, None
 
     def _find_short_trigger(self, df_5m: pd.DataFrame) -> Tuple[Optional[str], Dict]:
         """
@@ -349,9 +372,8 @@ class StrategyAnalyzerV2:
         # 形态二: 量价背离 (放量收小阳线实体)
         # 条件: 实体很小(相对于总振幅), 且是阳线(代表努力)
         if candle_range > 1e-9 and \
-                (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT:
-            # (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT and \
-            # candle['close'] > candle['open']:
+                (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT and \
+                candle['close'] > candle['open']:
             return "Bearish Volume-Price Divergence", {'trigger_candle_time': candle.name}
 
         return None, {}
