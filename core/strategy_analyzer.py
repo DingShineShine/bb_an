@@ -1,553 +1,338 @@
 """
-策略分析模块 - 项目的"大脑"
-实现"顺大势，逆小势"的多时间框架交易策略
+BinanceEventTrader - Strategy Analyzer (V2.1)
+==============================================
+首席系统架构师重构版
+
+本模块实现了"顺大势，逆小势"的分层级多时间框架交易策略。
+该策略基于严格的双向对称规则，分别处理上涨和下跌市场行情。
+
+核心逻辑:
+1.  **超大周期趋势过滤 (2H):** 确定主趋势方向（多头、空头、震荡）。
+2.  **中大周期动态支撑/阻力识别 (15M & 30M):** 寻找回调/反弹的潜在"地板"或"天花板"。
+3.  **小周期交易信号捕捉 (1M & 5M):** 在关键支撑/阻力位附近，寻找精准的、由成交量确认的入场时机。
 """
+
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
+from typing import Dict, Any, Tuple, Optional
 from loguru import logger
 
-from config.config import strategy_params, indicator_params
-from core.indicator_calculator import indicator_calculator
+from config.config import strategy_params, config
 
+# V2.1: 参数已移至 config.py 的 StrategyParams，不再在此处定义
 
-class StrategyAnalyzer:
+class StrategyAnalyzerV2:
     """
-    核心策略分析器
-    实现多时间框架交易策略：
-    - 2H图判断大趋势
-    - 5M图寻找入场点
-    - RSI背离作为核心信号
+    策略分析器 V2.1
+    实现了完整的、双向对称的交易规则。
     """
-    
+
     def __init__(self):
         """初始化策略分析器"""
-        self.strategy_params = strategy_params
-        self.indicator_params = indicator_params
-    
-    def analyze(
-        self, 
-        symbol: str,
-        data_2h: pd.DataFrame, 
-        data_5m: pd.DataFrame
-    ) -> Dict[str, Any]:
+        self.params = strategy_params
+        # 兼容旧版本config，如果不存在EMA_FAST等，则使用默认值
+        if not hasattr(self.params, 'EMA_FAST'): self.params.EMA_FAST = 10
+        if not hasattr(self.params, 'EMA_SLOW'): self.params.EMA_SLOW = 20
+        logger.info("策略分析器 V2.1 初始化成功。")
+
+    def analyze(self, symbol: str, data_dict: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         """
-        核心分析函数 - 策略的主入口
-        
+        主分析函数，根据提供的多时间框架数据生成交易决策。
+        这是整个策略逻辑的入口点。
+
         Args:
-            symbol: 交易对符号
-            data_2h: 2小时图数据 (大周期)
-            data_5m: 5分钟图数据 (小周期)
-        
+            symbol (str): 交易对名称。
+            data_dict (Dict[str, pd.DataFrame]): 包含多个时间框架数据的字典。
+                需要键: '2h', '30m', '15m', '5m', '1m'。
+
         Returns:
-            交易决策字典
+            Dict[str, Any]: 包含交易决策和详细分析的字典。
         """
         try:
-            logger.info(f"开始分析 {symbol} 的交易机会...")
-            
-            # 1. 计算所有技术指标
-            data_2h_with_indicators = indicator_calculator.calculate_all_indicators(data_2h)
-            data_5m_with_indicators = indicator_calculator.calculate_all_indicators(data_5m)
-            
-            # 2. 大周期趋势分析 (2H)
-            major_trend = self._analyze_major_trend(data_2h_with_indicators)
-            logger.info(f"{symbol} 大周期趋势: {major_trend['direction']} (强度: {major_trend['strength']:.2f})")
-            
-            # 3. 检查是否为震荡市 - 震荡市不交易！
-            if major_trend['direction'] == 'SIDEWAYS':
-                return {
-                    'symbol': symbol,
-                    'decision': 'WAIT',
-                    'reason': '大周期处于震荡市，暂时观望',
-                    'confidence': 0.0,
-                    'major_trend': major_trend,
-                    'minor_signals': {},
-                    'timestamp': datetime.now()
-                }
-            
-            # 4. 小周期信号分析 (5M)
-            minor_signals = self._analyze_minor_signals(
-                data_5m_with_indicators, 
-                major_trend['direction']
-            )
-            
-            # 5. 生成交易决策
-            decision = self._generate_trading_decision(
-                symbol, major_trend, minor_signals
-            )
-            
-            logger.info(f"{symbol} 分析完成: {decision['decision']} (置信度: {decision['confidence']:.2f})")
-            
-            return decision
-            
-        except Exception as e:
-            logger.error(f"分析 {symbol} 时发生错误: {e}")
-            return {
-                'symbol': symbol,
-                'decision': 'ERROR',
-                'reason': f'分析过程中发生错误: {str(e)}',
-                'confidence': 0.0,
-                'timestamp': datetime.now()
-            }
-    
-    def _analyze_major_trend(self, data_2h: pd.DataFrame) -> Dict[str, Any]:
-        """
-        分析大周期趋势 (2H图)
-        判断当前是上涨、下跌还是震荡趋势
-        
-        核心逻辑：
-        - 上涨趋势: 价格 > EMA(10) > EMA(20) 且均线向上
-        - 下跌趋势: 价格 < EMA(10) < EMA(20) 且均线向下  
-        - 震荡市: 均线走平、反复缠绕
-        """
-        try:
-            if len(data_2h) < 20:
-                return {'direction': 'UNKNOWN', 'strength': 0.0, 'details': {}}
-            
-            # 获取最近几根K线进行分析
-            recent_periods = self.strategy_params.TREND_CONFIRMATION_PERIODS
-            recent_data = data_2h.tail(recent_periods)
-            latest = data_2h.iloc[-1]
-            
-            # 基础趋势条件检查
-            trend_analysis = {
-                'direction': 'SIDEWAYS',
-                'strength': 0.0,
-                'details': {
-                    'current_price': latest['close'],
-                    'ema_10': latest['ema_10'],
-                    'ema_20': latest['ema_20'],
-                    'ema_fast_slope': latest['ema_fast_slope'],
-                    'ema_slow_slope': latest['ema_slow_slope'],
-                    'trend_bullish_count': recent_data['trend_bullish'].sum(),
-                    'trend_bearish_count': recent_data['trend_bearish'].sum(),
-                    'trend_sideways_count': recent_data['trend_sideways'].sum()
-                }
-            }
-            
-            # 判断趋势方向
-            bullish_signals = 0
-            bearish_signals = 0
-            
-            # 1. EMA排列检查
-            if latest['close'] > latest['ema_10'] > latest['ema_20']:
-                bullish_signals += 2
-            elif latest['close'] < latest['ema_10'] < latest['ema_20']:
-                bearish_signals += 2
-            
-            # 2. EMA斜率检查 (均线方向)
-            if latest['ema_fast_slope'] > 0 and latest['ema_slow_slope'] > 0:
-                bullish_signals += 1
-            elif latest['ema_fast_slope'] < 0 and latest['ema_slow_slope'] < 0:
-                bearish_signals += 1
-            
-            # 3. 趋势持续性检查
-            if recent_data['trend_bullish'].sum() >= recent_periods - 1:
-                bullish_signals += 1
-            elif recent_data['trend_bearish'].sum() >= recent_periods - 1:
-                bearish_signals += 1
-            
-            # 4. 市场结构检查 (Higher Lows / Lower Highs)
-            market_structure = self._analyze_market_structure(data_2h.tail(10))
-            if market_structure['higher_lows']:
-                bullish_signals += 1
-            elif market_structure['lower_highs']:
-                bearish_signals += 1
-            
-            # 确定趋势方向和强度
-            total_signals = bullish_signals + bearish_signals
-            
-            if bullish_signals >= 3:
-                trend_analysis['direction'] = 'BULLISH'
-                trend_analysis['strength'] = min(bullish_signals / 5.0, 1.0)
-            elif bearish_signals >= 3:
-                trend_analysis['direction'] = 'BEARISH'
-                trend_analysis['strength'] = min(bearish_signals / 5.0, 1.0)
-            else:
-                # 震荡市判断
-                trend_analysis['direction'] = 'SIDEWAYS'
-                trend_analysis['strength'] = 0.0
-            
-            trend_analysis['details']['bullish_signals'] = bullish_signals
-            trend_analysis['details']['bearish_signals'] = bearish_signals
-            trend_analysis['details']['market_structure'] = market_structure
-            
-            return trend_analysis
-            
-        except Exception as e:
-            logger.error(f"分析大周期趋势失败: {e}")
-            return {'direction': 'UNKNOWN', 'strength': 0.0, 'details': {}}
-    
-    def _analyze_minor_signals(
-        self, 
-        data_5m: pd.DataFrame, 
-        major_trend_direction: str
-    ) -> Dict[str, Any]:
-        """
-        分析小周期信号 (5M图)
-        根据大周期趋势寻找入场点
-        
-        核心逻辑：
-        - 大周期上涨：在5M回调低点寻找做多机会
-        - 大周期下跌：在5M反弹高点寻找做空机会
-        - 主要信号：RSI背离
-        - 辅助信号：价格行为、支撑阻力位
-        """
-        try:
-            signals = {
-                'rsi_divergence': {},
-                'price_action': {},
-                'support_resistance': {},
-                'entry_conditions': {},
-                'signal_strength': 0.0
-            }
-            
-            if len(data_5m) < 50:
-                return signals
-            
-            # 1. RSI背离检测 - 核心信号！
-            divergence = indicator_calculator.detect_rsi_divergence(data_5m)
-            signals['rsi_divergence'] = divergence
-            
-            # 2. 当前市场状态
-            current_state = indicator_calculator.get_current_market_state(data_5m)
-            signals['current_state'] = current_state
-            
-            # 3. 根据大周期趋势寻找相应的入场信号
-            if major_trend_direction == 'BULLISH':
-                # 大周期上涨 - 寻找5M回调底部做多
-                entry_signals = self._find_bullish_entry_signals(data_5m, divergence, current_state)
-            elif major_trend_direction == 'BEARISH':
-                # 大周期下跌 - 寻找5M反弹顶部做空
-                entry_signals = self._find_bearish_entry_signals(data_5m, divergence, current_state)
-            else:
-                entry_signals = {'valid': False, 'reasons': ['大周期趋势不明确']}
-            
-            signals['entry_conditions'] = entry_signals
-            
-            # 4. 计算综合信号强度
-            signals['signal_strength'] = self._calculate_signal_strength(
-                divergence, entry_signals, current_state
-            )
-            
-            return signals
-            
-        except Exception as e:
-            logger.error(f"分析小周期信号失败: {e}")
-            return {'signal_strength': 0.0}
-    
-    def _find_bullish_entry_signals(
-        self, 
-        data_5m: pd.DataFrame, 
-        divergence: Dict, 
-        current_state: Dict
-    ) -> Dict[str, Any]:
-        """
-        寻找做多入场信号
-        大周期上涨趋势中，在5M回调底部寻找做多机会
-        """
-        entry_signals = {
-            'valid': False,
-            'reasons': [],
-            'strength': 0.0,
-            'conditions_met': []
-        }
-        
-        signal_count = 0
-        max_signals = 5
-        
-        # 1. 核心条件：看涨RSI背离
-        if divergence.get('bullish_divergence', False):
-            signal_count += 2  # RSI背离是最重要的信号
-            entry_signals['conditions_met'].append('看涨RSI背离')
-        
-        # 2. 位置条件：接近支撑位
-        if current_state.get('near_support', False):
-            signal_count += 1
-            entry_signals['conditions_met'].append('接近支撑位')
-        
-        # 3. RSI超卖
-        if current_state.get('rsi', 50) < self.indicator_params.RSI_OVERSOLD:
-            signal_count += 1
-            entry_signals['conditions_met'].append('RSI超卖')
-        
-        # 4. 价格行为确认
-        if current_state.get('bullish_engulfing', False):
-            signal_count += 1
-            entry_signals['conditions_met'].append('看涨吞没形态')
-        
-        # 5. 价格位于EMA之下（回调确认）
-        if current_state.get('price', 0) < current_state.get('ema_fast', 0):
-            signal_count += 1
-            entry_signals['conditions_met'].append('价格回调至EMA下方')
-        
-        # 评估信号有效性
-        entry_signals['strength'] = signal_count / max_signals
-        
-        if signal_count >= 2 and divergence.get('bullish_divergence', False):
-            entry_signals['valid'] = True
-            entry_signals['reasons'].append(f'满足{signal_count}个做多条件，包含关键的RSI看涨背离')
-        else:
-            entry_signals['reasons'].append(f'仅满足{signal_count}个条件，缺少关键信号')
-        
-        return entry_signals
-    
-    def _find_bearish_entry_signals(
-        self, 
-        data_5m: pd.DataFrame, 
-        divergence: Dict, 
-        current_state: Dict
-    ) -> Dict[str, Any]:
-        """
-        寻找做空入场信号
-        大周期下跌趋势中，在5M反弹顶部寻找做空机会
-        """
-        entry_signals = {
-            'valid': False,
-            'reasons': [],
-            'strength': 0.0,
-            'conditions_met': []
-        }
-        
-        signal_count = 0
-        max_signals = 5
-        
-        # 1. 核心条件：看跌RSI背离
-        if divergence.get('bearish_divergence', False):
-            signal_count += 2  # RSI背离是最重要的信号
-            entry_signals['conditions_met'].append('看跌RSI背离')
-        
-        # 2. 位置条件：接近阻力位
-        if current_state.get('near_resistance', False):
-            signal_count += 1
-            entry_signals['conditions_met'].append('接近阻力位')
-        
-        # 3. RSI超买
-        if current_state.get('rsi', 50) > self.indicator_params.RSI_OVERBOUGHT:
-            signal_count += 1
-            entry_signals['conditions_met'].append('RSI超买')
-        
-        # 4. 价格行为确认
-        if current_state.get('bearish_engulfing', False):
-            signal_count += 1
-            entry_signals['conditions_met'].append('看跌吞没形态')
-        
-        # 5. 价格位于EMA之上（反弹确认）
-        if current_state.get('price', 0) > current_state.get('ema_fast', 0):
-            signal_count += 1
-            entry_signals['conditions_met'].append('价格反弹至EMA上方')
-        
-        # 评估信号有效性
-        entry_signals['strength'] = signal_count / max_signals
-        
-        if signal_count >= 2 and divergence.get('bearish_divergence', False):
-            entry_signals['valid'] = True
-            entry_signals['reasons'].append(f'满足{signal_count}个做空条件，包含关键的RSI看跌背离')
-        else:
-            entry_signals['reasons'].append(f'仅满足{signal_count}个条件，缺少关键信号')
-        
-        return entry_signals
-    
-    def _analyze_market_structure(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """
-        分析市场结构
-        检测Higher Lows (上涨趋势) 和 Lower Highs (下跌趋势)
-        """
-        try:
-            if len(data) < 6:
-                return {'higher_lows': False, 'lower_highs': False}
-            
-            # 寻找局部高低点
-            highs = data['high'].values
-            lows = data['low'].values
-            
-            # 简化的市场结构分析
-            recent_highs = []
-            recent_lows = []
-            
-            # 寻找最近的高点和低点
-            for i in range(2, len(data) - 2):
-                if (highs[i] > highs[i-1] and highs[i] > highs[i-2] and 
-                    highs[i] > highs[i+1] and highs[i] > highs[i+2]):
-                    recent_highs.append(highs[i])
-                
-                if (lows[i] < lows[i-1] and lows[i] < lows[i-2] and 
-                    lows[i] < lows[i+1] and lows[i] < lows[i+2]):
-                    recent_lows.append(lows[i])
-            
-            # 分析趋势
-            higher_lows = False
-            lower_highs = False
-            
-            if len(recent_lows) >= 2:
-                higher_lows = recent_lows[-1] > recent_lows[-2]
-            
-            if len(recent_highs) >= 2:
-                lower_highs = recent_highs[-1] < recent_highs[-2]
-            
-            return {
-                'higher_lows': higher_lows,
-                'lower_highs': lower_highs,
-                'recent_highs': recent_highs,
-                'recent_lows': recent_lows
-            }
-            
-        except Exception as e:
-            logger.error(f"分析市场结构失败: {e}")
-            return {'higher_lows': False, 'lower_highs': False}
-    
-    def _calculate_signal_strength(
-        self, 
-        divergence: Dict, 
-        entry_signals: Dict, 
-        current_state: Dict
-    ) -> float:
-        """计算综合信号强度"""
-        try:
-            strength = 0.0
-            
-            # RSI背离权重 (最重要)
-            divergence_strength = divergence.get('divergence_strength', 0.0)
-            strength += divergence_strength * 0.5
-            
-            # 入场条件权重
-            entry_strength = entry_signals.get('strength', 0.0)
-            strength += entry_strength * 0.3
-            
-            # 位置权重 (支撑阻力位)
-            if current_state.get('near_support') or current_state.get('near_resistance'):
-                strength += 0.2
-            
-            return min(strength, 1.0)
-            
-        except Exception as e:
-            logger.error(f"计算信号强度失败: {e}")
-            return 0.0
-    
-    def _generate_trading_decision(
-        self, 
-        symbol: str,
-        major_trend: Dict, 
-        minor_signals: Dict
-    ) -> Dict[str, Any]:
-        """
-        生成最终交易决策
-        综合大小周期分析结果，给出明确的交易建议
-        """
-        try:
+            # 步骤一：超大周期趋势过滤 (2H)
+            trend, trend_details = self._determine_2h_trend(data_dict['2h'])
+
             decision = {
                 'symbol': symbol,
                 'decision': 'WAIT',
                 'reason': '',
-                'confidence': 0.0,
-                'major_trend': major_trend,
-                'minor_signals': minor_signals,
-                'recommended_action': {},
-                'timestamp': datetime.now()
-            }
-            
-            # 获取关键信息
-            major_direction = major_trend.get('direction', 'UNKNOWN')
-            major_strength = major_trend.get('strength', 0.0)
-            signal_strength = minor_signals.get('signal_strength', 0.0)
-            entry_conditions = minor_signals.get('entry_conditions', {})
-            
-            # 决策逻辑
-            if major_direction == 'SIDEWAYS':
-                decision.update({
-                    'decision': 'WAIT',
-                    'reason': '大周期处于震荡市，不符合交易条件',
-                    'confidence': 0.0
-                })
-            
-            elif major_direction == 'BULLISH' and entry_conditions.get('valid', False):
-                # 大周期上涨 + 小周期做多信号
-                confidence = min((major_strength + signal_strength) / 2, 1.0)
-                
-                if confidence >= self.strategy_params.HIGH_CONFIDENCE_THRESHOLD:
-                    decision.update({
-                        'decision': 'LONG',
-                        'reason': f'大周期上涨趋势 + 5M回调做多信号 (RSI背离)',
-                        'confidence': confidence,
-                        'recommended_action': {
-                            'direction': 'LONG',
-                            'entry_reason': '看涨RSI背离 + 回调至支撑位',
-                            'conditions_met': entry_conditions.get('conditions_met', [])
-                        }
-                    })
-                elif confidence >= self.strategy_params.MEDIUM_CONFIDENCE_THRESHOLD:
-                    decision.update({
-                        'decision': 'LONG_WEAK',
-                        'reason': f'中等强度做多信号，建议谨慎操作',
-                        'confidence': confidence
-                    })
-                else:
-                    decision.update({
-                        'decision': 'WAIT',
-                        'reason': f'做多信号较弱，继续观望',
-                        'confidence': confidence
-                    })
-            
-            elif major_direction == 'BEARISH' and entry_conditions.get('valid', False):
-                # 大周期下跌 + 小周期做空信号
-                confidence = min((major_strength + signal_strength) / 2, 1.0)
-                
-                if confidence >= self.strategy_params.HIGH_CONFIDENCE_THRESHOLD:
-                    decision.update({
-                        'decision': 'SHORT',
-                        'reason': f'大周期下跌趋势 + 5M反弹做空信号 (RSI背离)',
-                        'confidence': confidence,
-                        'recommended_action': {
-                            'direction': 'SHORT',
-                            'entry_reason': '看跌RSI背离 + 反弹至阻力位',
-                            'conditions_met': entry_conditions.get('conditions_met', [])
-                        }
-                    })
-                elif confidence >= self.strategy_params.MEDIUM_CONFIDENCE_THRESHOLD:
-                    decision.update({
-                        'decision': 'SHORT_WEAK',
-                        'reason': f'中等强度做空信号，建议谨慎操作',
-                        'confidence': confidence
-                    })
-                else:
-                    decision.update({
-                        'decision': 'WAIT',
-                        'reason': f'做空信号较弱，继续观望',
-                        'confidence': confidence
-                    })
-            
-            else:
-                decision.update({
-                    'decision': 'WAIT',
-                    'reason': '未满足入场条件，继续等待机会',
-                    'confidence': 0.0
-                })
-            
-            return decision
-            
-        except Exception as e:
-            logger.error(f"生成交易决策失败: {e}")
-            return {
-                'symbol': symbol,
-                'decision': 'ERROR',
-                'reason': f'决策生成错误: {str(e)}',
-                'confidence': 0.0,
+                'details': {
+                    '2h_trend': trend,
+                    'trend_details': trend_details
+                },
                 'timestamp': datetime.now()
             }
 
+            if trend == "UPTREND":
+                # 步骤二 (Part B): 执行上涨趋势的做多逻辑
+                long_decision = self._analyze_long_opportunity(data_dict)
+                # 智能合并，而不是覆盖 'details'
+                decision['decision'] = long_decision.get('decision', 'WAIT')
+                decision['reason'] = long_decision.get('reason', '')
+                decision['details'].update(long_decision.get('details', {}))
+
+            elif trend == "DOWNTREND":
+                # 步骤二 (Part A): 执行下跌趋势的做空逻辑
+                short_decision = self._analyze_short_opportunity(data_dict)
+                # 智能合并，而不是覆盖 'details'
+                decision['decision'] = short_decision.get('decision', 'WAIT')
+                decision['reason'] = short_decision.get('reason', '')
+                decision['details'].update(short_decision.get('details', {}))
+            
+            else: # RANGING
+                # 步骤二 (Part C): 执行震荡市逻辑
+                decision['reason'] = "2H trend is ranging. Standing by."
+
+            logger.info(f"[{symbol}] 分析完成: {decision['decision']}. 原因: {decision['reason']}")
+            return decision
+
+        except KeyError as e:
+            logger.error(f"[{symbol}] 分析失败: 缺少必要的时间框架数据 - {e}")
+            return self._generate_error_decision(symbol, f"Missing data for timeframe: {e}")
+        except Exception as e:
+            logger.error(f"[{symbol}] 分析过程中发生未知错误: {e}", exc_info=True)
+            return self._generate_error_decision(symbol, f"An unexpected error occurred: {e}")
+
+    def _determine_2h_trend(self, df_2h: pd.DataFrame) -> Tuple[str, Dict]:
+        """[核心] 规则 1: 判断2H图的严格趋势。"""
+        if len(df_2h) < self.params.EMA_SLOW:
+            return "RANGING", {"error": "Not enough 2h data"}
+
+        latest = df_2h.iloc[-1]
+        price = latest['close']
+        ema_fast_val = latest[f'ema_{self.params.EMA_FAST}']
+        ema_slow_val = latest[f'ema_{self.params.EMA_SLOW}']
+        ema_fast_slope = latest['ema_fast_slope']
+        
+        details = {
+            'price': price,
+            'ema_fast': ema_fast_val,
+            'ema_slow': ema_slow_val,
+            'ema_fast_slope': ema_fast_slope,
+        }
+
+        # 严格多头排列定义
+        is_uptrend = (price > ema_fast_val > ema_slow_val) and (ema_fast_slope > 0)
+        if is_uptrend:
+            return "UPTREND", details
+
+        # 严格空头排列定义
+        is_downtrend = (price < ema_fast_val < ema_slow_val) and (ema_fast_slope < 0)
+        if is_downtrend:
+            return "DOWNTREND", details
+
+        return "RANGING", details
+    
+    # --- 做多逻辑 (Part B) ---
+    def _analyze_long_opportunity(self, data_dict: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+        """分析做多机会的完整流程。"""
+        details = {}
+        # 1. 识别动态支撑
+        support_level, support_name = self._identify_effective_support(data_dict)
+        details.update({'effective_support_name': support_name, 'effective_support_level': support_level})
+        if not support_level:
+            return {'decision': 'WAIT', 'reason': 'Could not identify effective support level.', 'details': details}
+
+        # 2. 检查价格是否在支撑位附近
+        signal_timeframe = config.SIGNAL_TIMEFRAME
+        price = data_dict[signal_timeframe].iloc[-1]['close']
+        is_near_support = abs(price - support_level) / price < self.params.PROXIMITY_THRESHOLD
+        details.update({'current_price': price, 'is_near_support': is_near_support})
+
+        if not is_near_support:
+            return {'decision': 'WAIT', 'reason': f'Price not near effective support {support_name} ({support_level:.4f}).', 'details': details}
+
+        # 3. 捕捉小周期做多信号
+        trigger, trigger_details = self._find_long_trigger(data_dict[signal_timeframe])
+        details.update(trigger_details)
+
+        if trigger:
+            return {
+                'decision': 'LONG', 
+                'reason': f'Price at support {support_name} with trigger: {trigger}', 
+                'details': details
+            }
+        
+        return {'decision': 'WAIT', 'reason': f'Price at support {support_name}, but no trigger signal found.', 'details': details}
+
+    def _identify_effective_support(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[Optional[float], Optional[str]]:
+        """[V2.2] 识别有效支撑前沿 (Effective Support Frontier)"""
+        price = data_dict['1m'].iloc[-1]['close']
+        # 支撑梯队，从强到弱排序
+        support_levels = [
+            ('30m_EMA20', data_dict['30m'].iloc[-1][f'ema_{self.params.EMA_SLOW}']),
+            ('30m_EMA10', data_dict['30m'].iloc[-1][f'ema_{self.params.EMA_FAST}']),
+            ('15m_EMA20', data_dict['15m'].iloc[-1][f'ema_{self.params.EMA_SLOW}']),
+            ('15m_EMA10', data_dict['15m'].iloc[-1][f'ema_{self.params.EMA_FAST}']),
+        ]
+
+        # 找到所有在价格下方的支撑位
+        valid_supports = [(name, level) for name, level in support_levels if price >= level]
+
+        if not valid_supports:
+            return None, None
+
+        # 第一个候选者是离价格最近的（最强的）有效支撑
+        effective_support = valid_supports[0]
+
+        # [核心逻辑] 检查聚集区效应
+        for i in range(len(valid_supports) - 1):
+            current_name, current_level = valid_supports[i]
+            next_name, next_level = valid_supports[i+1] # 更弱一级的支撑
+
+            # 如果两个支撑位非常接近，则认为它们形成聚集区，应以更强的为准
+            if abs(current_level - next_level) / price < self.params.CLUSTER_THRESHOLD:
+                # 当前支撑位被聚集，继续使用更强的支撑位
+                continue
+            else:
+                # 找到了一个独立的、非聚集的支撑位
+                effective_support = valid_supports[i]
+                break
+        
+        return effective_support[1], effective_support[0]
+
+    def _find_long_trigger(self, df_5m: pd.DataFrame) -> Tuple[Optional[str], Dict]:
+        """规则 3B: 在5M图上寻找"缩量企稳"或"放量反转"证据。"""
+        avg_volume = df_5m['volume'].rolling(window=20).mean().iloc[-1]
+        avg_body_size = abs(df_5m['close'] - df_5m['open']).rolling(window=20).mean().iloc[-1]
+        
+        # 检查最近3根K线
+        for i in range(1, 4):
+            if len(df_5m) < i + 1: continue
+            candle = df_5m.iloc[-i]
+            
+            # --- 检查1: 缩量企稳 ---
+            is_bearish = candle['close'] < candle['open']
+            if is_bearish:
+                is_volume_shrinking = candle['volume'] < avg_volume * self.params.VOLUME_SHRINK_FACTOR
+                is_body_small = abs(candle['close'] - candle['open']) < avg_body_size
+                if is_volume_shrinking and is_body_small:
+                    return "Shrinking Volume Stability", {'trigger_candle_time': candle.name}
+
+            # --- 检查2: 放量反转 ---
+            if i > 1:
+                prev_candle = df_5m.iloc[-i-1]
+                is_bullish_engulfing = (candle['close'] > candle['open'] and 
+                                        prev_candle['close'] < prev_candle['open'] and 
+                                        candle['close'] > prev_candle['open'] and 
+                                        candle['open'] < prev_candle['close'])
+                if is_bullish_engulfing:
+                    is_volume_spike = candle['volume'] > avg_volume * self.params.VOLUME_SPIKE_FACTOR
+                    if is_volume_spike:
+                        return "Volume Spike Reversal", {'trigger_candle_time': candle.name}
+        
+        return None, {}
+
+    # --- 做空逻辑 (Part A) ---
+    def _analyze_short_opportunity(self, data_dict: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+        """分析做空机会的完整流程。"""
+        details = {}
+        # 1. 识别动态阻力
+        resistance_level, resistance_name = self._identify_effective_resistance(data_dict)
+        details.update({'effective_resistance_name': resistance_name, 'effective_resistance_level': resistance_level})
+        if not resistance_level:
+            return {'decision': 'WAIT', 'reason': 'Could not identify effective resistance level.', 'details': details}
+
+        # 2. 检查价格是否在阻力位附近
+        signal_timeframe = config.SIGNAL_TIMEFRAME
+        price = data_dict[signal_timeframe].iloc[-1]['close']
+        is_near_resistance = abs(price - resistance_level) / price < self.params.PROXIMITY_THRESHOLD
+        details.update({'current_price': price, 'is_near_resistance': is_near_resistance})
+
+        if not is_near_resistance:
+            return {'decision': 'WAIT', 'reason': f'Price not near effective resistance {resistance_name} ({resistance_level:.4f}).', 'details': details}
+
+        # 3. 捕捉小周期做空信号
+        trigger, trigger_details = self._find_short_trigger(data_dict[signal_timeframe])
+        details.update(trigger_details)
+
+        if trigger:
+            return {
+                'decision': 'SHORT', 
+                'reason': f'Price at resistance {resistance_name} with trigger: {trigger}', 
+                'details': details
+            }
+        
+        return {'decision': 'WAIT', 'reason': f'Price at resistance {resistance_name}, but no trigger signal found.', 'details': details}
+
+    def _identify_effective_resistance(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[Optional[float], Optional[str]]:
+        """[V2.2] 识别有效阻力前沿 (Effective Resistance Frontier)"""
+        price = data_dict['1m'].iloc[-1]['close']
+        # 阻力梯队，从弱到强排序
+        resistance_levels = [
+            ('15m_EMA10', data_dict['15m'].iloc[-1][f'ema_{self.params.EMA_FAST}']),
+            ('15m_EMA20', data_dict['15m'].iloc[-1][f'ema_{self.params.EMA_SLOW}']),
+            ('30m_EMA10', data_dict['30m'].iloc[-1][f'ema_{self.params.EMA_FAST}']),
+            ('30m_EMA20', data_dict['30m'].iloc[-1][f'ema_{self.params.EMA_SLOW}']),
+        ]
+
+        # 找到所有在价格上方的阻力位
+        valid_resistances = [(name, level) for name, level in resistance_levels if price <= level]
+
+        if not valid_resistances:
+            return None, None
+
+        # 第一个候选者是离价格最近的（最弱的）有效阻力
+        effective_resistance = valid_resistances[0]
+
+        # [核心逻辑] 检查聚集区效应
+        for i in range(len(valid_resistances) - 1):
+            current_name, current_level = valid_resistances[i]
+            next_name, next_level = valid_resistances[i+1] # 更强一级的阻力
+
+            # 如果两个阻力位非常接近，则认为它们形成聚集区，应以更强的为准
+            if abs(next_level - current_level) / price < self.params.CLUSTER_THRESHOLD:
+                # 当前阻力位太弱且被聚集，升级到更强的阻力位
+                effective_resistance = valid_resistances[i+1]
+                continue
+            else:
+                # 找到了一个独立的、非聚集的阻力位
+                effective_resistance = valid_resistances[i]
+                break
+        
+        return effective_resistance[1], effective_resistance[0]
+
+    def _find_short_trigger(self, df_5m: pd.DataFrame) -> Tuple[Optional[str], Dict]:
+        """规则 3A: 在5M图上寻找"放量滞涨"证据。"""
+        candle = df_5m.iloc[-1]
+        avg_volume = df_5m['volume'].rolling(window=20).mean().iloc[-1]
+        
+        # 必须是阳线或十字星
+        if candle['close'] >= candle['open']:
+            is_volume_spike = candle['volume'] > avg_volume * self.params.VOLUME_SPIKE_FACTOR
+            
+            body_size = abs(candle['close'] - candle['open'])
+            # 处理body_size为0的情况，避免除零错误
+            if body_size > 1e-9: # 使用一个很小的值来避免浮点数精度问题
+                upper_shadow = candle['high'] - max(candle['open'], candle['close'])
+                is_stagnated = upper_shadow > body_size * self.params.UPPER_SHADOW_FACTOR
+            else: # 十字星
+                is_stagnated = (candle['high'] - candle['low']) > 0 # 确保不是一条横线
+            
+            if is_volume_spike and is_stagnated:
+                return "Volume Spike Stagnation", {'trigger_candle_time': candle.name}
+
+        return None, {}
+
+    def _generate_error_decision(self, symbol: str, reason: str) -> Dict[str, Any]:
+        """生成统一的错误决策格式"""
+        return {
+            'symbol': symbol,
+            'decision': 'ERROR',
+            'reason': reason,
+            'details': {},
+            'timestamp': datetime.now()
+        }
 
 # 创建全局策略分析器实例
-strategy_analyzer = StrategyAnalyzer()
+strategy_analyzer_v2 = StrategyAnalyzerV2()
 
-# 便捷函数
-def analyze_trading_opportunity(
-    symbol: str,
-    data_2h: pd.DataFrame, 
-    data_5m: pd.DataFrame
-) -> Dict[str, Any]:
-    """便捷函数：分析交易机会"""
-    return strategy_analyzer.analyze(symbol, data_2h, data_5m)
+# 便捷函数，方便外部调用
+def analyze_trading_opportunity_v2(symbol: str, data_dict: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+    """便捷函数：分析交易机会 V2.1"""
+    # 确保所有需要的数据都已计算指标
+    # 注意：指标计算应在调用此函数之前完成
+    return strategy_analyzer_v2.analyze(symbol, data_dict)
 
 # 导出
-__all__ = ['StrategyAnalyzer', 'strategy_analyzer', 'analyze_trading_opportunity'] 
+__all__ = ['StrategyAnalyzerV2', 'strategy_analyzer_v2', 'analyze_trading_opportunity_v2'] 

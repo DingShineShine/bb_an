@@ -28,6 +28,28 @@ class IndicatorCalculator:
         self.divergence_lookback = indicator_params.DIVERGENCE_LOOKBACK
         self.min_divergence_bars = indicator_params.MIN_DIVERGENCE_BARS
     
+    def calculate_indicators_for_all_timeframes(self, data_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+        """
+        为所有时间框架的数据计算所需的技术指标。
+        这是策略V2.1的核心指标计算函数。
+        """
+        processed_data = {}
+        for timeframe, df in data_dict.items():
+            if df is not None and not df.empty:
+                try:
+                    # 为每个时间框架的df计算指标
+                    df_with_indicators = self.calculate_all_indicators(df)
+                    processed_data[timeframe] = df_with_indicators
+                except Exception as e:
+                    logger.error(f"在 {timeframe} 上计算指标失败: {e}")
+                    # 如果一个时间框架失败，则整个数据无效
+                    return {}
+            else:
+                logger.warning(f"跳过在 {timeframe} 上的指标计算，因为数据为空。")
+                return {}
+        
+        return processed_data
+
     def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         计算所有需要的技术指标
@@ -44,15 +66,16 @@ class IndicatorCalculator:
             # 基础指标计算
             df = self._calculate_ema(df)
             df = self._calculate_rsi(df)
-            df = self._calculate_price_action_signals(df)
+
+            # 为V2.1策略添加成交量均线
+            df['volume_MA_20'] = df['volume'].rolling(window=20).mean()
+
+            # 移除旧的、不再需要的复杂计算
+            # df = self._calculate_price_action_signals(df)
+            # df = self._analyze_trend(df)
+            # df = self._calculate_support_resistance(df)
             
-            # 趋势分析
-            df = self._analyze_trend(df)
-            
-            # 支撑阻力位
-            df = self._calculate_support_resistance(df)
-            
-            logger.debug(f"成功计算技术指标，数据长度: {len(df)}")
+            logger.debug(f"成功为数据长度 {len(df)} 计算了基础指标 (EMA, RSI, Volume MA)")
             return df
             
         except Exception as e:

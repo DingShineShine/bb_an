@@ -33,10 +33,12 @@ class Config:
     # =============================================================================
     # 时间框架配置
     # =============================================================================
-    # 大周期：用于趋势判断
-    MAJOR_TIMEFRAME: str = '2h'
-    # 小周期：用于入场点寻找
-    MINOR_TIMEFRAME: str = '5m'
+    # 策略V2.1所需的所有时间框架
+    TIMEFRAMES: List[str] = ['1m', '5m', '15m', '30m', '2h']
+    
+    # 关键时间框架定义 (方便访问)
+    TREND_TIMEFRAME: str = '2h'    # 大周期：用于趋势判断
+    SIGNAL_TIMEFRAME: str = '1m'   # 小周期：用于寻找入场信号
     
     # K线数据获取数量
     KLINES_LIMIT: int = 200
@@ -68,16 +70,15 @@ class Config:
         
         # 趋势判断参数
         TREND_CONFIRMATION_PERIODS: int = 3  # 趋势确认需要的周期数
-        SIDEWAYS_THRESHOLD: float = 0.5      # 震荡市判断阈值(%)
         
-        # 信号强度阈值
-        HIGH_CONFIDENCE_THRESHOLD: float = 0.8
-        MEDIUM_CONFIDENCE_THRESHOLD: float = 0.6
+        # V2.1 信号触发参数 (集中管理)
+        PROXIMITY_THRESHOLD: float = 0.005   # 价格距离支撑/阻力位的接近阈值 (0.5%)
+        VOLUME_SPIKE_FACTOR: float = 2.0     # 成交量放大因子 (正常均值的2倍)
+        VOLUME_SHRINK_FACTOR: float = 0.5    # 成交量萎缩因子 (正常均值的0.5倍)
+        UPPER_SHADOW_FACTOR: float = 2.0     # 上影线与实体比例因子 (上影线是实体的2倍)
         
-        # 风险管理参数
-        MAX_RISK_PER_TRADE: float = 0.02    # 单笔交易最大风险(2%)
-        STOP_LOSS_RATIO: float = 0.015      # 止损比例(1.5%)
-        TAKE_PROFIT_RATIO: float = 0.03     # 止盈比例(3%)
+        # V2.2 新增：聚集区判断阈值
+        CLUSTER_THRESHOLD: float = 0.002     # 支撑/阻力聚集区判断阈值 (0.2%)
     
     # =============================================================================
     # 系统配置

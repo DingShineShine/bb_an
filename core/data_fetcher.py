@@ -20,6 +20,8 @@ class DataFetcher:
         """初始化数据获取器"""
         self.client: Optional[AsyncClient] = None
         self.is_connected: bool = False
+        self.klines_limit = config.KLINES_LIMIT
+        self.timeframes = config.TIMEFRAMES  # 从配置中获取所有时间框架
         
     async def initialize(self) -> bool:
         """初始化连接"""
@@ -32,21 +34,17 @@ class DataFetcher:
                 
             # 创建异步客户端
             if config.USE_TESTNET:
-                self.client = await AsyncClient.create(
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    testnet=True
-                )
+                self.client = AsyncClient(api_key, api_secret, tld='com', testnet=True)
                 logger.info("已连接到币安测试网")
             else:
-                self.client = await AsyncClient.create(
-                    api_key=api_key,
-                    api_secret=api_secret
-                )
+                self.client = AsyncClient(api_key, api_secret, tld='com')
                 logger.info("已连接到币安主网")
             
-            # 测试连接
-            await self._test_connection()
+            # 测试连接，如果失败则直接返回False
+            if not await self.test_connection():
+                logger.error("API连接测试失败，无法继续初始化。请检查您的网络、API密钥或系统时间。")
+                return False
+
             self.is_connected = True
             return True
             
@@ -54,7 +52,7 @@ class DataFetcher:
             logger.error(f"初始化币安客户端失败: {e}")
             return False
     
-    async def _test_connection(self) -> None:
+    async def test_connection(self) -> bool:
         """测试API连接"""
         try:
             server_time = await self.client.get_server_time()
@@ -64,9 +62,11 @@ class DataFetcher:
             account_info = await self.client.get_account()
             logger.info("API连接测试成功")
             
+            return True
+            
         except Exception as e:
             logger.error(f"API连接测试失败: {e}")
-            raise
+            return False
     
     async def get_klines_data(
         self, 
@@ -89,7 +89,7 @@ class DataFetcher:
             raise RuntimeError("数据获取器未初始化，请先调用initialize()")
         
         try:
-            limit = limit or config.KLINES_LIMIT
+            limit = limit or self.klines_limit
             
             # 获取K线数据
             klines = await self.client.get_klines(
@@ -108,8 +108,8 @@ class DataFetcher:
             logger.error(f"获取K线数据API错误 {symbol}-{interval}: {e}")
             raise
         except Exception as e:
-            logger.error(f"获取K线数据失败 {symbol}-{interval}: {e}")
-            raise
+            logger.error(f"获取 {symbol} 在 {interval} 的K线数据失败: {e}")
+            return None
     
     async def get_multi_timeframe_data(
         self,
@@ -158,6 +158,25 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"获取多时间框架数据失败 {symbol}: {e}")
             raise
+    
+    async def get_all_timeframes_data(self, symbol: str) -> Dict[str, pd.DataFrame]:
+        """
+        一次性异步获取单个交易对的所有预设时间框架的K线数据。
+        这是策略V2.1需要的主要数据获取函数。
+        """
+        tasks = [self.get_klines_data(symbol, tf) for tf in self.timeframes]
+        results = await asyncio.gather(*tasks)
+        
+        data_dict = {}
+        for tf, df in zip(self.timeframes, results):
+            if df is not None and not df.empty:
+                data_dict[tf] = df
+            else:
+                logger.warning(f"无法获取 {symbol} 在 {tf} 的数据，将跳过此时间框架。")
+                # 返回一个空字典，让上层知道数据不完整
+                return {}
+        
+        return data_dict
     
     async def get_all_pairs_data(
         self,
@@ -300,6 +319,47 @@ Returns:
             await self.client.close_connection()
             self.is_connected = False
             logger.info("币安客户端连接已关闭")
+
+    async def fetch_historical_klines(self, symbol: str, interval: str, end_dt: datetime) -> Optional[pd.DataFrame]:
+        """
+        [新增] 获取指定结束时间点的历史K线数据。
+        这是策略复盘功能的核心。
+        """
+        try:
+            # python-binance 使用毫秒级时间戳字符串
+            end_str = str(int(end_dt.timestamp() * 1000))
+            
+            # 调用API获取历史数据
+            klines = await self.client.get_historical_klines(
+                symbol=symbol,
+                interval=interval,
+                end_str=end_str,
+                limit=self.klines_limit
+            )
+
+            if not klines:
+                logger.warning(f"在 {end_dt} 未找到 {symbol}-{interval} 的历史数据。")
+                return None
+
+            # 将原始数据转换为pandas DataFrame
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume', 
+                'close_time', 'quote_asset_volume', 'number_of_trades', 
+                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+            ])
+            
+            # 数据类型转换
+            numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+            df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
+            
+            # 将时间戳设置为索引
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            return df
+        except Exception as e:
+            logger.error(f"获取 {symbol} 在 {interval} 的历史K线数据时失败 (截至 {end_dt}): {e}", exc_info=True)
+            return None
 
 
 # 创建全局数据获取器实例
