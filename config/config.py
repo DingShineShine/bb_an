@@ -147,4 +147,22 @@ __all__ = [
     'strategy_params',
     'system_params',
     'event_contract_params'
-] 
+]
+
+# --- 新增: 数据库配置 ---
+# 定义数据持久化的根目录
+# 在Docker容器内部，我们将其映射到 /app/data
+# 在本地直接运行时，它就是项目根目录下的 'data' 文件夹
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+
+# 定义SQLite数据库文件的完整路径
+# 我们的程序将在这个路径下创建并读写 trading_data.db 文件
+DATABASE_FILE = os.path.join(DATA_DIR, 'trading_data.db')
+
+# --- 新增: 日志配置 ---
+LOG_DIR = os.path.join(BASE_DIR, 'logs')
+LOG_FILE = os.path.join(LOG_DIR, 'trader.log')
+
+# 确保数据和日志目录在程序启动时存在
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True) 
