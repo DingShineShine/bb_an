@@ -15,7 +15,8 @@ COPY requirements.txt .
 
 # 安装依赖
 # --no-cache-dir 选项可以减小镜像体积
-RUN pip install --no-cache-dir -r requirements.txt
+# 新增 -i 参数, 指定使用清华大学的镜像源，可以大幅提升下载速度，解决网络超时问题
+RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制项目中的所有文件到工作目录
 COPY . .
