@@ -17,6 +17,8 @@ from core.data_fetcher import DataFetcher
 from core.indicator_calculator import IndicatorCalculator
 # 导入新的V2.1策略分析器
 from core.strategy_analyzer import analyze_trading_opportunity_v2, StrategyAnalyzerV2
+import json
+import requests
 
 
 class BinanceEventTrader:
@@ -255,6 +257,13 @@ class BinanceEventTrader:
             if active_signals:
                 logger.info("🎯 活跃交易信号:")
                 for signal in active_signals:
+                    text_b = {'text': f'bbbbbb'}
+                    json_b = {'msg_type': 'text', 'content': text_b}
+                    requests.post('https://open.feishu.cn/open-apis/bot/v2/hook/c8905c57-0d68-4366-93eb-df219b8794ad',
+                                  headers={
+                                      'Content-Type': 'application/json'
+                                  }
+                                  , data=json.dumps(json_b))
                     logger.info(f"   • {signal}")
             else:
                 logger.info("🔇 当前无活跃交易信号")
