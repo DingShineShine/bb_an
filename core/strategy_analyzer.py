@@ -19,6 +19,7 @@ from loguru import logger
 
 from config.config import strategy_params, config
 
+
 # V2.1: 参数已移至 config.py 的 StrategyParams，不再在此处定义
 
 class StrategyAnalyzerV2:
@@ -78,8 +79,8 @@ class StrategyAnalyzerV2:
                 decision['decision'] = short_decision.get('decision', 'WAIT')
                 decision['reason'] = short_decision.get('reason', '')
                 decision['details'].update(short_decision.get('details', {}))
-            
-            else: # RANGING
+
+            else:  # RANGING
                 # 步骤二 (Part C): 执行震荡市逻辑
                 decision['reason'] = "2H trend is ranging. Standing by."
 
@@ -103,7 +104,7 @@ class StrategyAnalyzerV2:
         ema_fast_val = latest[f'ema_{self.params.EMA_FAST}']
         ema_slow_val = latest[f'ema_{self.params.EMA_SLOW}']
         ema_fast_slope = latest['ema_fast_slope']
-        
+
         details = {
             'price': price,
             'ema_fast': ema_fast_val,
@@ -122,7 +123,7 @@ class StrategyAnalyzerV2:
             return "DOWNTREND", details
 
         return "RANGING", details
-    
+
     # --- 做多逻辑 (Part B) ---
     def _analyze_long_opportunity(self, data_dict: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         """分析做多机会的完整流程。"""
@@ -140,7 +141,9 @@ class StrategyAnalyzerV2:
         details.update({'current_price': price, 'is_near_support': is_near_support})
 
         if not is_near_support:
-            return {'decision': 'WAIT', 'reason': f'Price not near effective support {support_name} ({support_level:.4f}).', 'details': details}
+            return {'decision': 'WAIT',
+                    'reason': f'Price not near effective support {support_name} ({support_level:.4f}).',
+                    'details': details}
 
         # 3. 捕捉小周期做多信号
         trigger, trigger_details = self._find_long_trigger(data_dict[signal_timeframe])
@@ -148,12 +151,13 @@ class StrategyAnalyzerV2:
 
         if trigger:
             return {
-                'decision': 'LONG', 
-                'reason': f'Price at support {support_name} with trigger: {trigger}', 
+                'decision': 'LONG',
+                'reason': f'Price at support {support_name} with trigger: {trigger}',
                 'details': details
             }
-        
-        return {'decision': 'WAIT', 'reason': f'Price at support {support_name}, but no trigger signal found.', 'details': details}
+
+        return {'decision': 'WAIT', 'reason': f'Price at support {support_name}, but no trigger signal found.',
+                'details': details}
 
     def _identify_effective_support(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[Optional[float], Optional[str]]:
         """[V2.2] 识别有效支撑前沿 (Effective Support Frontier)"""
@@ -178,7 +182,7 @@ class StrategyAnalyzerV2:
         # [核心逻辑] 检查聚集区效应
         for i in range(len(valid_supports) - 1):
             current_name, current_level = valid_supports[i]
-            next_name, next_level = valid_supports[i+1] # 更弱一级的支撑
+            next_name, next_level = valid_supports[i + 1]  # 更弱一级的支撑
 
             # 如果两个支撑位非常接近，则认为它们形成聚集区，应以更强的为准
             if abs(current_level - next_level) / price < self.params.CLUSTER_THRESHOLD:
@@ -188,39 +192,51 @@ class StrategyAnalyzerV2:
                 # 找到了一个独立的、非聚集的支撑位
                 effective_support = valid_supports[i]
                 break
-        
+
         return effective_support[1], effective_support[0]
 
     def _find_long_trigger(self, df_5m: pd.DataFrame) -> Tuple[Optional[str], Dict]:
-        """规则 3B: 在5M图上寻找"缩量企稳"或"放量反转"证据。"""
-        avg_volume = df_5m['volume'].rolling(window=20).mean().iloc[-1]
-        avg_body_size = abs(df_5m['close'] - df_5m['open']).rolling(window=20).mean().iloc[-1]
-        
-        # 检查最近3根K线
-        for i in range(1, 4):
-            if len(df_5m) < i + 1: continue
-            candle = df_5m.iloc[-i]
-            
-            # --- 检查1: 缩量企稳 ---
-            is_bearish = candle['close'] < candle['open']
-            if is_bearish:
-                is_volume_shrinking = candle['volume'] < avg_volume * self.params.VOLUME_SHRINK_FACTOR
-                is_body_small = abs(candle['close'] - candle['open']) < avg_body_size
-                if is_volume_shrinking and is_body_small:
-                    return "Shrinking Volume Stability", {'trigger_candle_time': candle.name}
+        """
+        规则 3B (V2.3): 在5M图上寻找多种"放量企稳"的复合证据。
+        - 形态1: 看涨锤子线 (Hammer)
+        - 形态2: 看涨量价背离 (Volume-Price Divergence)
+        """
+        params = self.params.StrategyParams
+        if len(df_5m) < params.TRIGGER_VOLUME_AVG_PERIOD + 2:
+            return None, {}
 
-            # --- 检查2: 放量反转 ---
-            if i > 1:
-                prev_candle = df_5m.iloc[-i-1]
-                is_bullish_engulfing = (candle['close'] > candle['open'] and 
-                                        prev_candle['close'] < prev_candle['open'] and 
-                                        candle['close'] > prev_candle['open'] and 
-                                        candle['open'] < prev_candle['close'])
-                if is_bullish_engulfing:
-                    is_volume_spike = candle['volume'] > avg_volume * self.params.VOLUME_SPIKE_FACTOR
-                    if is_volume_spike:
-                        return "Volume Spike Reversal", {'trigger_candle_time': candle.name}
-        
+        candle = df_5m.iloc[-1]
+        prev_candle = df_5m.iloc[-2]
+
+        # 1. 检查成交量是否放大 (逻辑与做空相同)
+        avg_volume = df_5m['volume'].rolling(window=params.TRIGGER_VOLUME_AVG_PERIOD).mean().iloc[-2]
+        is_volume_spike = (candle['volume'] > avg_volume * params.TRIGGER_VOLUME_SPIKE_FACTOR) or \
+                          (candle['volume'] > prev_candle['volume'] * params.TRIGGER_VOLUME_SPIKE_FACTOR)
+
+        if not is_volume_spike:
+            return None, {}
+
+        # 2. 分析K线形态
+        body_size = abs(candle['close'] - candle['open'])
+        upper_shadow = candle['high'] - max(candle['open'], candle['close'])
+        lower_shadow = min(candle['open'], candle['close']) - candle['low']
+        candle_range = candle['high'] - candle['low']
+
+        # 形态一: 锤子线 (长下影, 不关心颜色)
+        # 条件: 下影线是实体的N倍, 且下影线也是上影线的N倍
+        if body_size > 1e-9 and \
+                lower_shadow > body_size * params.TRIGGER_SHADOW_FACTOR and \
+                lower_shadow > upper_shadow * params.TRIGGER_SHADOW_FACTOR:
+            return "Hammer Pattern", {'trigger_candle_time': candle.name}
+
+        # 形态二: 量价背离 (放量收小阴线实体)
+        # 条件: 实体很小(相对于总振幅), 且是阴线(代表抛售努力)
+        if candle_range > 1e-9 and \
+                (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT:
+            # (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT and \
+            # candle['close'] < candle['open']:
+            return "Bullish Volume-Price Divergence", {'trigger_candle_time': candle.name}
+
         return None, {}
 
     # --- 做空逻辑 (Part A) ---
@@ -240,7 +256,9 @@ class StrategyAnalyzerV2:
         details.update({'current_price': price, 'is_near_resistance': is_near_resistance})
 
         if not is_near_resistance:
-            return {'decision': 'WAIT', 'reason': f'Price not near effective resistance {resistance_name} ({resistance_level:.4f}).', 'details': details}
+            return {'decision': 'WAIT',
+                    'reason': f'Price not near effective resistance {resistance_name} ({resistance_level:.4f}).',
+                    'details': details}
 
         # 3. 捕捉小周期做空信号
         trigger, trigger_details = self._find_short_trigger(data_dict[signal_timeframe])
@@ -248,14 +266,16 @@ class StrategyAnalyzerV2:
 
         if trigger:
             return {
-                'decision': 'SHORT', 
-                'reason': f'Price at resistance {resistance_name} with trigger: {trigger}', 
+                'decision': 'SHORT',
+                'reason': f'Price at resistance {resistance_name} with trigger: {trigger}',
                 'details': details
             }
-        
-        return {'decision': 'WAIT', 'reason': f'Price at resistance {resistance_name}, but no trigger signal found.', 'details': details}
 
-    def _identify_effective_resistance(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[Optional[float], Optional[str]]:
+        return {'decision': 'WAIT', 'reason': f'Price at resistance {resistance_name}, but no trigger signal found.',
+                'details': details}
+
+    def _identify_effective_resistance(self, data_dict: Dict[str, pd.DataFrame]) -> Tuple[
+        Optional[float], Optional[str]]:
         """[V2.2] 识别有效阻力前沿 (Effective Resistance Frontier)"""
         price = data_dict['1m'].iloc[-1]['close']
         # 阻力梯队，从弱到强排序
@@ -278,39 +298,61 @@ class StrategyAnalyzerV2:
         # [核心逻辑] 检查聚集区效应
         for i in range(len(valid_resistances) - 1):
             current_name, current_level = valid_resistances[i]
-            next_name, next_level = valid_resistances[i+1] # 更强一级的阻力
+            next_name, next_level = valid_resistances[i + 1]  # 更强一级的阻力
 
             # 如果两个阻力位非常接近，则认为它们形成聚集区，应以更强的为准
             if abs(next_level - current_level) / price < self.params.CLUSTER_THRESHOLD:
                 # 当前阻力位太弱且被聚集，升级到更强的阻力位
-                effective_resistance = valid_resistances[i+1]
+                effective_resistance = valid_resistances[i + 1]
                 continue
             else:
                 # 找到了一个独立的、非聚集的阻力位
                 effective_resistance = valid_resistances[i]
                 break
-        
+
         return effective_resistance[1], effective_resistance[0]
 
     def _find_short_trigger(self, df_5m: pd.DataFrame) -> Tuple[Optional[str], Dict]:
-        """规则 3A: 在5M图上寻找"放量滞涨"证据。"""
+        """
+        规则 3A (V2.3): 在5M图上寻找多种"放量滞涨"的复合证据。
+        - 形态1: 看跌射击之星 (Shooting Star)
+        - 形态2: 看跌量价背离 (Volume-Price Divergence)
+        """
+        params = self.params.StrategyParams
+        if len(df_5m) < params.TRIGGER_VOLUME_AVG_PERIOD + 2:
+            return None, {}
+
         candle = df_5m.iloc[-1]
-        avg_volume = df_5m['volume'].rolling(window=20).mean().iloc[-1]
-        
-        # 必须是阳线或十字星
-        if candle['close'] >= candle['open']:
-            is_volume_spike = candle['volume'] > avg_volume * self.params.VOLUME_SPIKE_FACTOR
-            
-            body_size = abs(candle['close'] - candle['open'])
-            # 处理body_size为0的情况，避免除零错误
-            if body_size > 1e-9: # 使用一个很小的值来避免浮点数精度问题
-                upper_shadow = candle['high'] - max(candle['open'], candle['close'])
-                is_stagnated = upper_shadow > body_size * self.params.UPPER_SHADOW_FACTOR
-            else: # 十字星
-                is_stagnated = (candle['high'] - candle['low']) > 0 # 确保不是一条横线
-            
-            if is_volume_spike and is_stagnated:
-                return "Volume Spike Stagnation", {'trigger_candle_time': candle.name}
+        prev_candle = df_5m.iloc[-2]
+
+        # 1. 检查成交量是否放大
+        avg_volume = df_5m['volume'].rolling(window=params.TRIGGER_VOLUME_AVG_PERIOD).mean().iloc[-2]
+        is_volume_spike = (candle['volume'] > avg_volume * params.TRIGGER_VOLUME_SPIKE_FACTOR) or \
+                          (candle['volume'] > prev_candle['volume'] * params.TRIGGER_VOLUME_SPIKE_FACTOR)
+
+        if not is_volume_spike:
+            return None, {}
+
+        # 2. 分析K线形态
+        body_size = abs(candle['close'] - candle['open'])
+        upper_shadow = candle['high'] - max(candle['open'], candle['close'])
+        lower_shadow = min(candle['open'], candle['close']) - candle['low']
+        candle_range = candle['high'] - candle['low']
+
+        # 形态一: 射击之星 (长上影, 不关心颜色)
+        # 条件: 上影线是实体的N倍, 且上影线也是下影线的N倍, 避免长腿十字
+        if body_size > 1e-9 and \
+                upper_shadow > body_size * params.TRIGGER_SHADOW_FACTOR and \
+                upper_shadow > lower_shadow * params.TRIGGER_SHADOW_FACTOR:
+            return "Shooting Star Pattern", {'trigger_candle_time': candle.name}
+
+        # 形态二: 量价背离 (放量收小阳线实体)
+        # 条件: 实体很小(相对于总振幅), 且是阳线(代表努力)
+        if candle_range > 1e-9 and \
+                (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT:
+            # (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT and \
+            # candle['close'] > candle['open']:
+            return "Bearish Volume-Price Divergence", {'trigger_candle_time': candle.name}
 
         return None, {}
 
@@ -324,8 +366,10 @@ class StrategyAnalyzerV2:
             'timestamp': datetime.now()
         }
 
+
 # 创建全局策略分析器实例
 strategy_analyzer_v2 = StrategyAnalyzerV2()
+
 
 # 便捷函数，方便外部调用
 def analyze_trading_opportunity_v2(symbol: str, data_dict: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
@@ -334,5 +378,6 @@ def analyze_trading_opportunity_v2(symbol: str, data_dict: Dict[str, pd.DataFram
     # 注意：指标计算应在调用此函数之前完成
     return strategy_analyzer_v2.analyze(symbol, data_dict)
 
+
 # 导出
-__all__ = ['StrategyAnalyzerV2', 'strategy_analyzer_v2', 'analyze_trading_opportunity_v2'] 
+__all__ = ['StrategyAnalyzerV2', 'strategy_analyzer_v2', 'analyze_trading_opportunity_v2']

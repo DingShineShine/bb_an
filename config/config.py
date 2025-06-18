@@ -75,14 +75,23 @@ class Config:
         # 趋势判断参数
         TREND_CONFIRMATION_PERIODS: int = 3  # 趋势确认需要的周期数
         
-        # V2.1 信号触发参数 (集中管理)
+        # V2.1 信号触发参数
         PROXIMITY_THRESHOLD: float = 0.005   # 价格距离支撑/阻力位的接近阈值 (0.5%)
-        VOLUME_SPIKE_FACTOR: float = 2.0     # 成交量放大因子 (正常均值的2倍)
-        VOLUME_SHRINK_FACTOR: float = 0.5    # 成交量萎缩因子 (正常均值的0.5倍)
-        UPPER_SHADOW_FACTOR: float = 2.0     # 上影线与实体比例因子 (上影线是实体的2倍)
+        VOLUME_SHRINK_FACTOR: float = 0.5    # 成交量萎缩因子(用于其他可能的判断)
         
         # V2.2 新增：聚集区判断阈值
         CLUSTER_THRESHOLD: float = 0.002     # 支撑/阻力聚集区判断阈值 (0.2%)
+
+        # --- V2.3 新增：价格行为触发器参数 (Price Action Triggers) ---
+        # 参考周期
+        TRIGGER_VOLUME_AVG_PERIOD: int = 5         # 计算平均成交量的周期 (更灵敏)
+        
+        # 强度因子
+        TRIGGER_VOLUME_SPIKE_FACTOR: float = 1.8    # 成交量放大倍数 (更灵敏)
+        TRIGGER_SHADOW_FACTOR: float = 2.0          # 关键影线与实体的比例
+        
+        # 形态阈值
+        TRIGGER_SMALL_BODY_THRESHOLD_PCT: float = 0.3 # 量价背离中, "小实体"的定义 (实体/振幅 < 30%)
     
     # =============================================================================
     # 系统配置

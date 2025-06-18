@@ -68,7 +68,7 @@ class IndicatorCalculator:
             df = self._calculate_rsi(df)
 
             # 为V2.1策略添加成交量均线
-            df['volume_MA_20'] = df['volume'].rolling(window=20).mean()
+            df['volume_MA_20'] = df['volume'].rolling(window=5).mean()
 
             # 移除旧的、不再需要的复杂计算
             # df = self._calculate_price_action_signals(df)
