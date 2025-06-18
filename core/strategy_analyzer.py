@@ -163,7 +163,7 @@ class StrategyAnalyzerV2:
         """
         V2.4 区间攻防算法：识别有效支撑 (2H趋势向上时)
         """
-        strat_params = self.params.StrategyParams
+        strat_params = self.params
         candle = data_dict[config.SIGNAL_TIMEFRAME].iloc[-1]
         open_price, close_price = candle['open'], candle['close']
 
@@ -214,7 +214,7 @@ class StrategyAnalyzerV2:
         - 形态1: 看涨锤子线 (Hammer)
         - 形态2: 看涨量价背离 (Volume-Price Divergence)
         """
-        params = self.params.StrategyParams
+        params = self.params
         if len(df_5m) < params.TRIGGER_VOLUME_AVG_PERIOD + 2:
             return None, {}
 
@@ -290,7 +290,7 @@ class StrategyAnalyzerV2:
         """
         V2.4 区间攻防算法：识别有效阻力 (2H趋势向下时)
         """
-        strat_params = self.params.StrategyParams
+        strat_params = self.params
         candle = data_dict[config.SIGNAL_TIMEFRAME].iloc[-1]
         open_price, close_price = candle['open'], candle['close']
 
@@ -341,7 +341,7 @@ class StrategyAnalyzerV2:
         - 形态1: 看跌射击之星 (Shooting Star)
         - 形态2: 看跌量价背离 (Volume-Price Divergence)
         """
-        params = self.params.StrategyParams
+        params = self.params
         if len(df_5m) < params.TRIGGER_VOLUME_AVG_PERIOD + 2:
             return None, {}
 
