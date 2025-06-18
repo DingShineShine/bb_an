@@ -6,13 +6,17 @@ import os
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-# 加载环境变量
-load_dotenv()
+# --- 核心: 定义项目根目录 ---
+# os.path.abspath(__file__) -> /path/to/project/config/config.py
+# os.path.dirname(...)       -> /path/to/project/config
+# os.path.dirname(...)       -> /path/to/project
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 从根目录加载.env文件，实现一次性加载
+load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 class Config:
     """主配置类"""
-    from dotenv import load_dotenv
-    load_dotenv()
     
     # =============================================================================
     # API配置
@@ -117,8 +121,6 @@ class Config:
 
     @classmethod
     def validate_config(cls) -> bool:
-        from dotenv import load_dotenv
-        load_dotenv()
         """验证配置的有效性"""
         if cls.USE_TESTNET:
             return bool(cls.TESTNET_API_KEY and cls.TESTNET_API_SECRET)
