@@ -150,9 +150,16 @@ class StrategyAnalyzerV2:
         details.update(trigger_details)
 
         if trigger:
+            # --- V2.5 新增: 构建详细的决策快照 ---
+            reason = f"Price at support {support_name}. Trigger: {trigger}."
+            if trigger == "Hammer Pattern":
+                reason += f" (LS({trigger_details.get('lower_shadow', 0):.2f}) > Body({trigger_details.get('body_size', 0):.2f}) * {trigger_details.get('shadow_factor_used', 0):.1f})"
+            elif trigger == "Bullish Volume-Price Divergence":
+                reason += f" (Body/Range({trigger_details.get('body_to_range_ratio', 0):.1%}) < {trigger_details.get('threshold_pct_used', 0):.1%})"
+
             return {
                 'decision': 'LONG',
-                'reason': f'Price at support {support_name} with trigger: {trigger}',
+                'reason': reason,
                 'details': details
             }
 
@@ -229,25 +236,46 @@ class StrategyAnalyzerV2:
         if not is_volume_spike:
             return None, {}
 
-        # 2. 分析K线形态
+        # 2. 分析K线形态和构建详细信息
         body_size = abs(candle['close'] - candle['open'])
         upper_shadow = candle['high'] - max(candle['open'], candle['close'])
         lower_shadow = min(candle['open'], candle['close']) - candle['low']
         candle_range = candle['high'] - candle['low']
+
+        details = {
+            'volume': candle['volume'],
+            'avg_volume': avg_volume,
+            'is_volume_spike': is_volume_spike,
+            'trigger_candle_time': candle.name,
+        }
 
         # 形态一: 锤子线 (长下影, 不关心颜色)
         # 条件: 下影线是实体的N倍, 且下影线也是上影线的N倍
         if body_size > 1e-9 and \
                 lower_shadow > body_size * params.TRIGGER_SHADOW_FACTOR and \
                 lower_shadow > upper_shadow * params.TRIGGER_SHADOW_FACTOR:
-            return "Hammer Pattern", {'trigger_candle_time': candle.name}
+            details.update({
+                'pattern': 'Hammer',
+                'lower_shadow': lower_shadow,
+                'body_size': body_size,
+                'upper_shadow': upper_shadow,
+                'shadow_factor_used': params.TRIGGER_SHADOW_FACTOR,
+            })
+            return "Hammer Pattern", details
 
         # 形态二: 量价背离 (放量收小阴线实体)
         # 条件: 实体很小(相对于总振幅), 且是阴线(代表抛售努力)
         if candle_range > 1e-9 and \
                 (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT and \
                 candle['close'] < candle['open']:
-            return "Bullish Volume-Price Divergence", {'trigger_candle_time': candle.name}
+            details.update({
+                'pattern': 'Bullish Divergence',
+                'body_size': body_size,
+                'candle_range': candle_range,
+                'body_to_range_ratio': body_size / candle_range,
+                'threshold_pct_used': params.TRIGGER_SMALL_BODY_THRESHOLD_PCT,
+            })
+            return "Bullish Volume-Price Divergence", details
 
         return None, {}
 
@@ -277,9 +305,16 @@ class StrategyAnalyzerV2:
         details.update(trigger_details)
 
         if trigger:
+            # --- V2.5 新增: 构建详细的决策快照 ---
+            reason = f"Price at resistance {resistance_name}. Trigger: {trigger}."
+            if trigger == "Shooting Star Pattern":
+                reason += f" (US({trigger_details.get('upper_shadow', 0):.2f}) > Body({trigger_details.get('body_size', 0):.2f}) * {trigger_details.get('shadow_factor_used', 0):.1f})"
+            elif trigger == "Bearish Volume-Price Divergence":
+                reason += f" (Body/Range({trigger_details.get('body_to_range_ratio', 0):.1%}) < {trigger_details.get('threshold_pct_used', 0):.1%})"
+            
             return {
                 'decision': 'SHORT',
-                'reason': f'Price at resistance {resistance_name} with trigger: {trigger}',
+                'reason': reason,
                 'details': details
             }
 
@@ -362,19 +397,40 @@ class StrategyAnalyzerV2:
         lower_shadow = min(candle['open'], candle['close']) - candle['low']
         candle_range = candle['high'] - candle['low']
 
+        details = {
+            'volume': candle['volume'],
+            'avg_volume': avg_volume,
+            'is_volume_spike': is_volume_spike,
+            'trigger_candle_time': candle.name,
+        }
+
         # 形态一: 射击之星 (长上影, 不关心颜色)
         # 条件: 上影线是实体的N倍, 且上影线也是下影线的N倍, 避免长腿十字
         if body_size > 1e-9 and \
                 upper_shadow > body_size * params.TRIGGER_SHADOW_FACTOR and \
                 upper_shadow > lower_shadow * params.TRIGGER_SHADOW_FACTOR:
-            return "Shooting Star Pattern", {'trigger_candle_time': candle.name}
+            details.update({
+                'pattern': 'Shooting Star',
+                'upper_shadow': upper_shadow,
+                'body_size': body_size,
+                'lower_shadow': lower_shadow,
+                'shadow_factor_used': params.TRIGGER_SHADOW_FACTOR,
+            })
+            return "Shooting Star Pattern", details
 
         # 形态二: 量价背离 (放量收小阳线实体)
         # 条件: 实体很小(相对于总振幅), 且是阳线(代表努力)
         if candle_range > 1e-9 and \
                 (body_size / candle_range) < params.TRIGGER_SMALL_BODY_THRESHOLD_PCT and \
                 candle['close'] > candle['open']:
-            return "Bearish Volume-Price Divergence", {'trigger_candle_time': candle.name}
+            details.update({
+                'pattern': 'Bearish Divergence',
+                'body_size': body_size,
+                'candle_range': candle_range,
+                'body_to_range_ratio': body_size / candle_range,
+                'threshold_pct_used': params.TRIGGER_SMALL_BODY_THRESHOLD_PCT,
+            })
+            return "Bearish Volume-Price Divergence", details
 
         return None, {}
 
